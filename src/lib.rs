@@ -63,7 +63,7 @@ pub fn short_vector(n: &BigUint, lambda: &BigUint, k: &BigUint) -> (BigInt, BigI
 
 // Precomputations for Shamir's trick
 pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWCurveConfig>(
-    window_width: usize,
+    window_width: u64,
     p: &Projective<C>,
     q: &Projective<C>,
     u: Sign,
@@ -94,8 +94,8 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
 // get i-th digit of u in base 2^window_width
 // assumes window_width divides 64
 #[inline(always)]
-fn get_digit(u: &[u64], i: usize, window_width: usize) -> usize {
-    let idx = window_width * i;
+fn get_digit(u: &[u64], i: u64, window_width: u64) -> usize {
+    let idx = (window_width * i) as usize;
     let e = u[idx / 64] as usize;
     let idx_e = idx % 64;
     let mask: usize = (1 << window_width) - 1;
@@ -112,23 +112,20 @@ fn pad_vec(v: &mut Vec<u64>, len: usize) {
 // Shamir's trick (exponentiation using vector-addition chains)
 // windowed method
 pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
-    window_width: usize,
+    window_width: u64,
     u: &BigInt,
     v: &BigInt,
     precomputations: Vec<Vec<Projective<C>>>,
 ) -> Projective<C> {
-    //assert_eq!(64 % window_width, 0);
+    assert_eq!(64 % window_width, 0);
     let mut r = Projective::zero();
-    // TODO: handle unwrap
-    let t: usize = std::cmp::max(u.abs().bits(), v.abs().bits())
-        .try_into()
-        .unwrap();
-    let d = t.div_ceil(window_width);
+    let t: u64 = std::cmp::max(u.abs().bits(), v.abs().bits());
+    let d = t.div_ceil(window_width as u64);
     let mut u = u.to_u64_digits().1;
     let mut v = v.to_u64_digits().1;
-    let dd = std::cmp::max(u.len(), v.len());
-    pad_vec(&mut u, dd);
-    pad_vec(&mut v, dd);
+    let m = std::cmp::max(u.len(), v.len());
+    pad_vec(&mut u, m);
+    pad_vec(&mut v, m);
     let mut ui;
     let mut vi;
     for i in (0..=(d - 1)).rev() {
@@ -165,7 +162,7 @@ pub fn mul<C: SWCurveConfig>(
 
     let (u, v) = short_vector(&a, &b, scalar);
 
-    let window_width: usize = 2;
+    let window_width: u64 = 2;
     let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
         window_width,
         &point.into(),
@@ -187,6 +184,7 @@ pub mod tests {
     use ark_ff::{MontConfig, MontFp};
     use num_bigint::BigUint;
     use num_traits::{Num, Signed};
+    use proptest::proptest;
     use rand::rngs::OsRng;
 
     use super::*;
@@ -268,5 +266,24 @@ pub mod tests {
         let p = random_point::<ark_bls12_381::g1::Config>();
 
         assert_eq!(mul(p, &k_uint, &BETA, &LAMBDA), p.mul(k)); // the GLV method computes [k]p
+    }
+
+    use proptest::prelude::*;
+
+    // Custom strategy to generate random `Fr` elements
+    fn arb_fr() -> impl Strategy<Value = Fr> {
+        any::<[u8; 32]>().prop_map(|bytes| Fr::from_le_bytes_mod_order(&bytes))
+    }
+
+    proptest! {
+         #![proptest_config(ProptestConfig::with_cases(100_000))]
+        #[test]
+        fn test_simultaneous_multiple_scalar_multiplication_proptest(k in arb_fr()) {
+            let k_uint = BigUint::from(k.into_bigint());
+
+            let p = random_point::<ark_bls12_381::g1::Config>();
+
+            assert_eq!(mul(p, &k_uint, &BETA, &LAMBDA), p.mul(k)); // the GLV method computes [k]p
+        }
     }
 }

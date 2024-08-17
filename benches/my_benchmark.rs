@@ -1,10 +1,13 @@
+use std::ops::Mul;
 use ark_bls12_381::Fr;
 use ark_ec::bls12::Bls12Config;
 use ark_ec::scalar_mul::glv::GLVConfig;
 use ark_ec::short_weierstrass::Projective;
 use ark_ff::{MontFp, PrimeField};
 use ark_std::UniformRand;
+use ff::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use group::Group;
 
 use glv_rs::{mul, random_point};
 use num_bigint::BigUint;
@@ -61,10 +64,22 @@ pub fn bench_glv_affine_arkworks(c: &mut Criterion) {
     });
 }
 
+pub fn bench_glv_blst(c: &mut Criterion) {
+    c.bench_function("BLS12-381 G1 projective mul (blstrs crate)", |b| {
+        b.iter(|| {
+            blstrs::G1Projective::mul(
+                black_box(blstrs::G1Projective::random(&mut OsRng)),
+                black_box(&blstrs::Scalar::random(&mut OsRng)),
+            )
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_glv,
     bench_glv_affine_arkworks,
-    bench_glv_projective_arkworks
+    bench_glv_projective_arkworks,
+    bench_glv_blst
 );
 criterion_main!(benches);
