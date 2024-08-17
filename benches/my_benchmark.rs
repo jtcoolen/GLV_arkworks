@@ -75,11 +75,23 @@ pub fn bench_glv_blst(c: &mut Criterion) {
     });
 }
 
+pub fn bench_naive(c: &mut Criterion) {
+    c.bench_function("BLS12-381 G1 mul without GLV (arkworks crate)", |b| {
+        b.iter(|| {
+                ark_bls12_381::g1::G1Affine::mul(
+                black_box(random_point::<ark_bls12_381::g1::Config>()),
+                black_box(Fr::rand(&mut OsRng)),
+            )
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_glv,
     bench_glv_affine_arkworks,
     bench_glv_projective_arkworks,
-    bench_glv_blst
+    bench_glv_blst,
+    bench_naive
 );
 criterion_main!(benches);

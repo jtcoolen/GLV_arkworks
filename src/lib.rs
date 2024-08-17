@@ -3,7 +3,6 @@ use ark_ff::{AdditiveGroup, PrimeField, Zero};
 use ark_std::UniformRand;
 use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_integer::Integer;
-use num_traits::Signed;
 use rand::rngs::OsRng;
 
 fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
@@ -38,7 +37,9 @@ fn norm_squared(a: &BigInt, b: &BigInt) -> BigInt {
 }
 
 // Returns a short vector in the integer lattice spanned by vectors vec1 and vec2
-// TODO: change inputs to scalar field elements
+// TODO example 1 of https://arxiv.org/pdf/1310.5250
+// b1 = (1/2 t_pi-1, c) and (c, 1-1/2 * t_pi)
+// where c^2  = q-(t_pi/2)^2
 pub fn short_vector(n: &BigUint, lambda: &BigUint, k: &BigUint) -> (BigInt, BigInt) {
     let (r, v) = truncated_extended_gcd(&n.to_bigint().unwrap(), &lambda.to_bigint().unwrap());
     let (r0, v0) = (r[0].clone(), -&v[0]);
@@ -50,8 +51,9 @@ pub fn short_vector(n: &BigUint, lambda: &BigUint, k: &BigUint) -> (BigInt, BigI
     } else {
         (r2, v2)
     };
-    // TODO: check that vec1 and vec2 are linearly independent
     let mut det = &vec1.0 * &vec2.1 - &vec1.1 * &vec2.0;
+    assert!(!det.is_zero());
+
     let mut b1: BigInt = 2 * k.to_bigint().unwrap() * &vec2.1 + &det;
     let mut b2: BigInt = -2 * k.to_bigint().unwrap() * &vec1.1 + &det;
     det *= 2;
@@ -69,10 +71,9 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
     q: &Projective<C>,
     u: Sign,
     v: Sign,
-) -> Vec<Vec<Projective<C>>> {
-    assert!(64 % window_width == 0);
-    // TODO: use flat vector
-    let mut table = vec![vec![Projective::zero(); 1 << window_width]; 1 << window_width];
+) -> Vec<Projective<C>> {
+    assert_eq!(64 % window_width, 0);
+    let mut table = vec![Projective::zero(); 1 << (2 * window_width)];
     let mut pp = Projective::zero();
     let mut qq = Projective::zero();
     let (p, q) = match (u, v) {
@@ -81,10 +82,12 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
         (Sign::Minus, Sign::Plus) => (-*p, *q),
         _ => (*p, *q),
     };
+    let mut offset;
     for i in 0..=((1 << window_width) - 1) {
         qq.set_zero();
+        offset = i * (1 << window_width);
         for j in 0..=((1 << window_width) - 1) {
-            table[i][j] = pp + qq;
+            table[offset + j] += pp + qq;
             qq += q;
         }
         pp += p;
@@ -97,17 +100,14 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
 #[inline(always)]
 fn get_digit(u: &[u64], i: u64, window_width: u64) -> usize {
     let idx = (window_width * i) as usize;
-    let e = u[idx / 64] as usize;
-    let idx_e = idx % 64;
-    let mask: usize = (1 << window_width) - 1;
-    ((mask << idx_e) & e) >> idx_e
+    let e = u[idx / 64];
+    let shift = idx % 64;
+    ((e >> shift) & ((1 << window_width) - 1)) as usize
 }
 
 fn pad_vec(v: &mut Vec<u64>, len: usize) {
     assert!(v.len() <= len);
-    while v.len() < len {
-        v.push(0_u64);
-    }
+    v.resize(len, 0_u64);
 }
 
 // Shamir's trick (exponentiation using vector-addition chains)
@@ -116,11 +116,11 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
     window_width: u64,
     u: &BigInt,
     v: &BigInt,
-    precomputations: Vec<Vec<Projective<C>>>,
+    precomputations: Vec<Projective<C>>,
 ) -> Projective<C> {
     assert_eq!(64 % window_width, 0);
     let mut r = Projective::zero();
-    let t: u64 = std::cmp::max(u.abs().bits(), v.abs().bits());
+    let t: u64 = std::cmp::max(u.bits(), v.bits());
     let d = t.div_ceil(window_width);
     let mut u = u.to_u64_digits().1;
     let mut v = v.to_u64_digits().1;
@@ -133,10 +133,11 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
         for _ in 0..window_width {
             r.double_in_place();
         }
+
         ui = get_digit(&u, i, window_width);
         vi = get_digit(&v, i, window_width);
         if !(ui == 0 && vi == 0) {
-            r += &precomputations[ui][vi];
+            r += &precomputations[ui * (1 << window_width) + vi];
         }
     }
     r
@@ -234,48 +235,48 @@ pub mod tests {
     }
 
     proptest! {
-         #![proptest_config(ProptestConfig::with_cases(10_000))]
-         #[test]
-         fn test_simultaneous_multiple_scalar_multiplication(k in arb_fr()) {
-             let k_uint = BigUint::from(k.into_bigint());
+        #![proptest_config(ProptestConfig::with_cases(10_000))]
+        #[test]
+        fn test_simultaneous_multiple_scalar_multiplication(k in arb_fr()) {
+            let k_uint = BigUint::from(k.into_bigint());
 
-             let p = random_point::<ark_bls12_381::g1::Config>();
+            let p = random_point::<ark_bls12_381::g1::Config>();
 
-             assert_eq!(mul(p, &k_uint, &BETA, &LAMBDA), p.mul(k)); // the GLV method computes [k]p
-         }
+            assert_eq!(mul(p, &k_uint, &BETA, &LAMBDA), p.mul(k)); // the GLV method computes [k]p
+        }
 
-         #[test]
-         fn test_short_vector(k in arb_bigint()) {
-             let a: BigUint = ark_bls12_381::FrConfig::MODULUS.into();
-             let b: BigUint = LAMBDA.into();
+        #[test]
+        fn test_short_vector(k in arb_bigint()) {
+            let a: BigUint = ark_bls12_381::FrConfig::MODULUS.into();
+            let b: BigUint = LAMBDA.into();
 
-             let (k1, k2) = short_vector(&a, &b, &k.clone().to_biguint().unwrap());
-             assert!(k1.abs() < BigInt::from(a.clone()));
-             assert!(k2.abs() < BigInt::from(a.clone()));
-             let k_ = (&k1 + Into::<BigInt>::into(b) * &k2).mod_floor(&a.to_bigint().unwrap());
+            let (k1, k2) = short_vector(&a, &b, &k.clone().to_biguint().unwrap());
+            assert!(k1.abs() < BigInt::from(a.clone()));
+            assert!(k2.abs() < BigInt::from(a.clone()));
+            let k_ = (&k1 + Into::<BigInt>::into(b) * &k2).mod_floor(&a.to_bigint().unwrap());
 
-             assert_eq!(k_.to_biguint().unwrap(), k.to_biguint().unwrap()); // k = k1 + lambda * k2 mod a
-             assert!(BigInt::max(k1, k2) < a.sqrt().into()); // (k1, k2) is a short vector
-         }
+            assert_eq!(k_.to_biguint().unwrap(), k.to_biguint().unwrap()); // k = k1 + lambda * k2 mod a
+            assert!(BigInt::max(k1, k2) < a.sqrt().into()); // (k1, k2) is a short vector
+        }
 
-         #[test]
-         fn test_truncated_extended_gcd(a in arb_bigint(), b in arb_bigint()) {
-             let (r, v) = truncated_extended_gcd(&a, &b);
-             let mut res: BigInt = r[1].clone();
-             res *= v[2].abs();
-             let mut res2 = r[2].clone();
-             res2 *= v[1].abs();
-             res += res2;
+        #[test]
+        fn test_truncated_extended_gcd(a in arb_bigint(), b in arb_bigint()) {
+            let (r, v) = truncated_extended_gcd(&a, &b);
+            let mut res: BigInt = r[1].clone();
+            res *= v[2].abs();
+            let mut res2 = r[2].clone();
+            res2 *= v[1].abs();
+            res += res2;
 
-             assert_eq!(res, a);
+            assert_eq!(res, a);
 
-             let mut res: BigInt = r[0].clone();
-             res *= v[1].abs();
-             let mut res2 = r[1].clone();
-             res2 *= v[0].abs();
-             res += res2;
+            let mut res: BigInt = r[0].clone();
+            res *= v[1].abs();
+            let mut res2 = r[1].clone();
+            res2 *= v[0].abs();
+            res += res2;
 
-             assert_eq!(res, a);
-         }
-     }
+            assert_eq!(res, a);
+        }
+    }
 }
