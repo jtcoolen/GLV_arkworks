@@ -1,30 +1,12 @@
-use ark_bls12_381::{g1, Fq, Fr};
-use ark_ff::{field_new, Zero};
+use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
+use ark_ff::{PrimeField, Zero};
 use ark_std::UniformRand;
 use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_integer::Integer;
 use num_traits::Signed;
 
-// TODO: compute BETA for any elliptic curve defined over a prime field
-// here the method doesn't work with root 1/BETA
-const BETA: Fq = field_new!(Fq, "4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436");
-/* Generated with PARI/GP: BETA is an element of order 3 in Fq
-? q
-4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787
-? isprime(q)
-1
-? 1/znprimroot(q)^((q-1)/3)
-Mod(4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436, 4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787) */
-
-/* LAMBDA is a primitive 3rd root of unity mod r
-? r
-52435875175126190479447740508185965837690552500527637822603658699938581184513
-? znprimroot(r)^((r-1)/3)
-Mod(228988810152649578064853576960394133503, 52435875175126190479447740508185965837690552500527637822603658699938581184513)*/
-const LAMBDA: Fr = field_new!(Fr, "228988810152649578064853576960394133503");
-
-fn phi_inplace(affine: &mut g1::G1Affine) {
-    affine.x *= &BETA;
+fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
+    affine.x *= beta;
 }
 
 // Computes the remainders and Bézout coefficients for b of steps m,m+1,m+2 for the greatest r_m>sqrt(a)
@@ -80,18 +62,18 @@ pub fn short_vector(n: &BigUint, lambda: &BigUint, k: &BigUint) -> (BigInt, BigI
 }
 
 // Precomputations for Shamir's trick
-pub fn simultaneous_multiple_scalar_multiplication_create_precomputations(
+pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWCurveConfig>(
     window_width: usize,
-    p: &g1::G1Projective,
-    q: &g1::G1Projective,
+    p: &Projective<C>,
+    q: &Projective<C>,
     u: Sign,
     v: Sign,
-) -> Vec<Vec<g1::G1Projective>> {
+) -> Vec<Vec<Projective<C>>> {
     assert!(64 % window_width == 0);
     // TODO: use flat vector
-    let mut table = vec![vec![g1::G1Projective::zero(); 1 << window_width]; 1 << window_width];
-    let mut pp = g1::G1Projective::zero();
-    let mut qq = g1::G1Projective::zero();
+    let mut table = vec![vec![Projective::zero(); 1 << window_width]; 1 << window_width];
+    let mut pp = Projective::zero();
+    let mut qq = Projective::zero();
     let (p, q) = match (u, v) {
         (Sign::Minus, Sign::Minus) => (-*p, -*q),
         (Sign::Plus, Sign::Minus) => (*p, -*q),
@@ -129,14 +111,14 @@ fn pad_vec(v: &mut Vec<u64>, len: usize) {
 
 // Shamir's trick (exponentiation using vector-addition chains)
 // windowed method
-pub fn simultaneous_multiple_scalar_multiplication(
+pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
     window_width: usize,
     u: &BigInt,
     v: &BigInt,
-    precomputations: Vec<Vec<g1::G1Projective>>,
-) -> g1::G1Projective {
+    precomputations: Vec<Vec<Projective<C>>>,
+) -> Projective<C> {
     assert!(64 % window_width == 0);
-    let mut r = g1::G1Projective::zero();
+    let mut r = Projective::zero();
     // TODO: handle unwrap
     let t: usize = std::cmp::max(u.abs().bits(), v.abs().bits())
         .try_into()
@@ -145,16 +127,16 @@ pub fn simultaneous_multiple_scalar_multiplication(
     let mut u = u.abs().to_u64_digits().1;
     let mut v = v.abs().to_u64_digits().1;
     let dd = std::cmp::max(u.len(), v.len());
-    pad_vec(&mut u, dd as usize);
-    pad_vec(&mut v, dd as usize);
+    pad_vec(&mut u, dd);
+    pad_vec(&mut v, dd);
     let mut ui;
     let mut vi;
     for i in (0..=(d - 1)).rev() {
-        r *= (1 << window_width).into();
+        r *= C::ScalarField::from((1 << window_width) as u64);
         ui = get_digit(&u, i, window_width);
         vi = get_digit(&v, i, window_width);
         if !(ui == 0 && vi == 0) {
-            r += precomputations[ui][vi];
+            r += &precomputations[ui][vi];
         }
     }
     r
@@ -162,24 +144,72 @@ pub fn simultaneous_multiple_scalar_multiplication(
 
 // returns a point in the prime order subgroup G1
 // if G1=<g> then random_point=[n]g for random integer n
-pub fn random_point() -> g1::G1Affine {
+pub fn random_point<C: SWCurveConfig>() -> Affine<C> {
     let mut rng = ark_std::test_rng();
-    g1::G1Projective::rand(&mut rng).into()
+    Projective::rand(&mut rng).into()
+}
+
+pub fn mul<C: SWCurveConfig>(
+    point: Affine<C>,
+    scalar: &BigUint,
+    beta: &C::BaseField,
+    lambda: &C::ScalarField,
+) -> Projective<C> {
+    let a: BigUint = C::ScalarField::MODULUS.into();
+    let b: BigUint = (*lambda).into();
+
+    let mut phi_p = point;
+    phi_inplace(&mut phi_p, beta);
+    let (u, v) = short_vector(&a, &b, scalar);
+
+    let window_width: usize = 2;
+    let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
+        window_width,
+        &point.into(),
+        &phi_p.into(),
+        u.sign(),
+        v.sign(),
+    );
+
+    simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use ark_ec::AffineCurve;
-    use ark_ff::{BigInteger256, FpParameters};
+    use std::ops::{Mul, Rem};
+
+    use ark_bls12_381::Fr;
+    use ark_ec::bls12::Bls12Config;
+    use ark_ec::CurveGroup;
+    use ark_ff::{MontConfig, MontFp};
     use num_bigint::BigUint;
-    use num_traits::Signed;
-    use std::ops::Rem;
+    use num_traits::{Num, Signed};
+    use rand::rngs::OsRng;
+
+    use super::*;
+
+    // TODO: compute BETA for any elliptic curve defined over a prime field
+    // here the method doesn't work with root 1/BETA
+    const BETA: <ark_bls12_381::Config as Bls12Config>::Fp = MontFp!("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436");
+    /* Generated with PARI/GP: BETA is an element of order 3 in Fq
+    ? q
+    4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787
+    ? isprime(q)
+    1
+    ? 1/znprimroot(q)^((q-1)/3)
+    Mod(4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436, 4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787) */
+
+    /* LAMBDA is a primitive 3rd root of unity mod r
+    ? r
+    52435875175126190479447740508185965837690552500527637822603658699938581184513
+    ? znprimroot(r)^((r-1)/3)
+    Mod(228988810152649578064853576960394133503, 52435875175126190479447740508185965837690552500527637822603658699938581184513)*/
+    const LAMBDA: ark_bls12_381::Fr = MontFp!("228988810152649578064853576960394133503");
 
     #[test]
     fn test_truncated_extended_gcd() {
         // TODO: make test with randomized values
-        let a: BigUint = ark_bls12_381::FrParameters::MODULUS.into();
+        let a: BigUint = <ark_bls12_381::Config as Bls12Config>::Fp::MODULUS.into();
         let a: BigInt = a.into();
         let b: BigUint = LAMBDA.into();
         let b: BigInt = b.into();
@@ -204,54 +234,36 @@ mod tests {
 
     #[test]
     fn test_short_vector() {
-        let a: BigUint = ark_bls12_381::FrParameters::MODULUS.into();
+        let a: BigUint = ark_bls12_381::FrConfig::MODULUS.into();
         let b: BigUint = LAMBDA.into();
 
-        let k: BigInteger256 =
-            field_new!(Fr, "654589647885213749678705807402976612273608534928").into();
+        let k: BigInt =
+            BigInt::from_str_radix("654589647885213749678705807402976612273608534928", 10).unwrap();
 
-        let (k1, k2) = short_vector(&a, &b, &k.into());
+        let (k1, k2) = short_vector(&a, &b, &k.clone().to_biguint().unwrap());
         let kk: BigInt = BigInt::rem(&k1 + Into::<BigInt>::into(b) * &k2, &a.to_bigint().unwrap());
-        assert_eq!(kk.to_biguint().unwrap(), k.into()); // k = k1 + lambda * k2 mod a
+        assert_eq!(kk.to_biguint().unwrap(), k.to_biguint().unwrap()); // k = k1 + lambda * k2 mod a
         assert!(BigInt::max(k1, k2) < a.sqrt().into()); // (k1, k2) is a short vector
     }
 
     #[test]
     fn test_phi() {
-        let mut p = random_point();
+        let mut p = random_point::<ark_bls12_381::g1::Config>();
         assert!(p.is_on_curve());
         assert!(p.is_in_correct_subgroup_assuming_on_curve());
         // at this point order(p)=|Fr|=r
-        let mul = ark_ec::AffineCurve::mul(&p, LAMBDA);
-        phi_inplace(&mut p);
-        assert_eq!(p.into_projective(), mul); // [lambda]p=phi(p)
+        let mul = Affine::mul(p.clone(), LAMBDA);
+        phi_inplace(&mut p, &BETA);
+        assert_eq!(p, mul.into_affine()); // [lambda]p=phi(p)
     }
 
     #[test]
     fn test_simultaneous_multiple_scalar_multiplication() {
-        let a: BigUint = ark_bls12_381::FrParameters::MODULUS.into();
-        let b: BigUint = LAMBDA.into();
+        let k = Fr::rand(&mut OsRng);
+        let k_uint = BigUint::from(k.into_bigint());
 
-        let k: BigInteger256 =
-            field_new!(Fr, "654589647885213749678705807976612273608534928").into();
+        let p = random_point::<ark_bls12_381::g1::Config>();
 
-        let p = random_point();
-        let mut phi_p = p.clone();
-        phi_inplace(&mut phi_p);
-        let (u, v) = short_vector(&a, &b, &k.into());
-
-        let window_width: usize = 2;
-        let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
-            window_width,
-            &p.into(),
-            &phi_p.into(),
-            u.sign(),
-            v.sign(),
-        );
-
-        assert_eq!(
-            simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations),
-            p.mul(k)
-        ); // the GLV method computes [k]p
+        assert_eq!(mul(p, &k_uint, &BETA, &LAMBDA), p.mul(k)); // the GLV method computes [k]p
     }
 }
