@@ -14,3 +14,13 @@ num-bigint = "0.4.6"
 num-integer = "0.1.46"
 num-traits = "0.2.19"
 rand = "0.8.5"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "my_benchmark"
+harness = false
+
+[profile.bench]
+debug = true

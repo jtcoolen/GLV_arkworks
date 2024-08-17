@@ -1,5 +1,5 @@
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
-use ark_ff::{PrimeField, Zero};
+use ark_ff::{AdditiveGroup, PrimeField, Zero};
 use ark_std::UniformRand;
 use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_integer::Integer;
@@ -117,22 +117,24 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
     v: &BigInt,
     precomputations: Vec<Vec<Projective<C>>>,
 ) -> Projective<C> {
-    assert!(64 % window_width == 0);
+    //assert_eq!(64 % window_width, 0);
     let mut r = Projective::zero();
     // TODO: handle unwrap
     let t: usize = std::cmp::max(u.abs().bits(), v.abs().bits())
         .try_into()
         .unwrap();
-    let d = num_integer::Integer::div_ceil(&t, &window_width);
-    let mut u = u.abs().to_u64_digits().1;
-    let mut v = v.abs().to_u64_digits().1;
+    let d = t.div_ceil(window_width);
+    let mut u = u.to_u64_digits().1;
+    let mut v = v.to_u64_digits().1;
     let dd = std::cmp::max(u.len(), v.len());
     pad_vec(&mut u, dd);
     pad_vec(&mut v, dd);
     let mut ui;
     let mut vi;
     for i in (0..=(d - 1)).rev() {
-        r *= C::ScalarField::from((1 << window_width) as u64);
+        for _ in 0..window_width {
+            r.double_in_place();
+        }
         ui = get_digit(&u, i, window_width);
         vi = get_digit(&v, i, window_width);
         if !(ui == 0 && vi == 0) {
@@ -160,6 +162,7 @@ pub fn mul<C: SWCurveConfig>(
 
     let mut phi_p = point;
     phi_inplace(&mut phi_p, beta);
+
     let (u, v) = short_vector(&a, &b, scalar);
 
     let window_width: usize = 2;
@@ -175,7 +178,7 @@ pub fn mul<C: SWCurveConfig>(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::ops::{Mul, Rem};
 
     use ark_bls12_381::Fr;
@@ -190,7 +193,7 @@ mod tests {
 
     // TODO: compute BETA for any elliptic curve defined over a prime field
     // here the method doesn't work with root 1/BETA
-    const BETA: <ark_bls12_381::Config as Bls12Config>::Fp = MontFp!("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436");
+    pub const BETA: <ark_bls12_381::Config as Bls12Config>::Fp = MontFp!("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436");
     /* Generated with PARI/GP: BETA is an element of order 3 in Fq
     ? q
     4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787
@@ -204,7 +207,7 @@ mod tests {
     52435875175126190479447740508185965837690552500527637822603658699938581184513
     ? znprimroot(r)^((r-1)/3)
     Mod(228988810152649578064853576960394133503, 52435875175126190479447740508185965837690552500527637822603658699938581184513)*/
-    const LAMBDA: ark_bls12_381::Fr = MontFp!("228988810152649578064853576960394133503");
+    pub const LAMBDA: ark_bls12_381::Fr = MontFp!("228988810152649578064853576960394133503");
 
     #[test]
     fn test_truncated_extended_gcd() {
