@@ -1,13 +1,13 @@
-use std::ops::Mul;
 use ark_bls12_381::Fr;
 use ark_ec::bls12::Bls12Config;
 use ark_ec::scalar_mul::glv::GLVConfig;
 use ark_ec::short_weierstrass::Projective;
 use ark_ff::{MontFp, PrimeField};
 use ark_std::UniformRand;
-use ff::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use ff::Field;
 use group::Group;
+use std::ops::Mul;
 
 use glv_rs::{mul, random_point};
 use num_bigint::BigUint;
@@ -27,7 +27,7 @@ Mod(4002409555221667392624310435006688643935503118305586438271171395842971157480
 52435875175126190479447740508185965837690552500527637822603658699938581184513
 ? znprimroot(r)^((r-1)/3)
 Mod(228988810152649578064853576960394133503, 52435875175126190479447740508185965837690552500527637822603658699938581184513)*/
-pub const LAMBDA: ark_bls12_381::Fr = MontFp!("228988810152649578064853576960394133503");
+pub const LAMBDA: Fr = MontFp!("228988810152649578064853576960394133503");
 
 pub fn bench_glv(c: &mut Criterion) {
     c.bench_function("BLS12-381 G1 mul (glv-rs crate)", |b| {

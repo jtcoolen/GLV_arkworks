@@ -4,6 +4,7 @@ use ark_std::UniformRand;
 use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_integer::Integer;
 use num_traits::Signed;
+use rand::rngs::OsRng;
 
 fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
     affine.x *= beta;
@@ -120,7 +121,7 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
     assert_eq!(64 % window_width, 0);
     let mut r = Projective::zero();
     let t: u64 = std::cmp::max(u.abs().bits(), v.abs().bits());
-    let d = t.div_ceil(window_width as u64);
+    let d = t.div_ceil(window_width);
     let mut u = u.to_u64_digits().1;
     let mut v = v.to_u64_digits().1;
     let m = std::cmp::max(u.len(), v.len());
@@ -144,8 +145,7 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
 // returns a point in the prime order subgroup G1
 // if G1=<g> then random_point=[n]g for random integer n
 pub fn random_point<C: SWCurveConfig>() -> Affine<C> {
-    let mut rng = ark_std::test_rng();
-    Projective::rand(&mut rng).into()
+    Projective::rand(&mut OsRng).into()
 }
 
 pub fn mul<C: SWCurveConfig>(
@@ -157,10 +157,12 @@ pub fn mul<C: SWCurveConfig>(
     let a: BigUint = C::ScalarField::MODULUS.into();
     let b: BigUint = (*lambda).into();
 
+    let scalar = scalar.mod_floor(&a);
+
     let mut phi_p = point;
     phi_inplace(&mut phi_p, beta);
 
-    let (u, v) = short_vector(&a, &b, scalar);
+    let (u, v) = short_vector(&a, &b, &scalar);
 
     let window_width: u64 = 2;
     let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
@@ -183,9 +185,8 @@ pub mod tests {
     use ark_ec::CurveGroup;
     use ark_ff::{MontConfig, MontFp};
     use num_bigint::BigUint;
-    use num_traits::{Num, Signed};
+    use num_traits::Signed;
     use proptest::proptest;
-    use rand::rngs::OsRng;
 
     use super::*;
 
@@ -205,47 +206,7 @@ pub mod tests {
     52435875175126190479447740508185965837690552500527637822603658699938581184513
     ? znprimroot(r)^((r-1)/3)
     Mod(228988810152649578064853576960394133503, 52435875175126190479447740508185965837690552500527637822603658699938581184513)*/
-    pub const LAMBDA: ark_bls12_381::Fr = MontFp!("228988810152649578064853576960394133503");
-
-    #[test]
-    fn test_truncated_extended_gcd() {
-        // TODO: make test with randomized values
-        let a: BigUint = <ark_bls12_381::Config as Bls12Config>::Fp::MODULUS.into();
-        let a: BigInt = a.into();
-        let b: BigUint = LAMBDA.into();
-        let b: BigInt = b.into();
-
-        let (r, v) = truncated_extended_gcd(&a, &b);
-        let mut res: BigInt = r[1].clone();
-        res *= v[2].abs();
-        let mut res2 = r[2].clone();
-        res2 *= v[1].abs();
-        res += res2;
-
-        assert_eq!(res, a);
-
-        let mut res: BigInt = r[0].clone();
-        res *= v[1].abs();
-        let mut res2 = r[1].clone();
-        res2 *= v[0].abs();
-        res += res2;
-
-        assert_eq!(res, a);
-    }
-
-    #[test]
-    fn test_short_vector() {
-        let a: BigUint = ark_bls12_381::FrConfig::MODULUS.into();
-        let b: BigUint = LAMBDA.into();
-
-        let k: BigInt =
-            BigInt::from_str_radix("654589647885213749678705807402976612273608534928", 10).unwrap();
-
-        let (k1, k2) = short_vector(&a, &b, &k.clone().to_biguint().unwrap());
-        let kk: BigInt = BigInt::rem(&k1 + Into::<BigInt>::into(b) * &k2, &a.to_bigint().unwrap());
-        assert_eq!(kk.to_biguint().unwrap(), k.to_biguint().unwrap()); // k = k1 + lambda * k2 mod a
-        assert!(BigInt::max(k1, k2) < a.sqrt().into()); // (k1, k2) is a short vector
-    }
+    pub const LAMBDA: Fr = MontFp!("228988810152649578064853576960394133503");
 
     #[test]
     fn test_phi() {
@@ -258,16 +219,6 @@ pub mod tests {
         assert_eq!(p, mul.into_affine()); // [lambda]p=phi(p)
     }
 
-    #[test]
-    fn test_simultaneous_multiple_scalar_multiplication() {
-        let k = Fr::rand(&mut OsRng);
-        let k_uint = BigUint::from(k.into_bigint());
-
-        let p = random_point::<ark_bls12_381::g1::Config>();
-
-        assert_eq!(mul(p, &k_uint, &BETA, &LAMBDA), p.mul(k)); // the GLV method computes [k]p
-    }
-
     use proptest::prelude::*;
 
     // Custom strategy to generate random `Fr` elements
@@ -275,15 +226,56 @@ pub mod tests {
         any::<[u8; 32]>().prop_map(|bytes| Fr::from_le_bytes_mod_order(&bytes))
     }
 
-    proptest! {
-         #![proptest_config(ProptestConfig::with_cases(100_000))]
-        #[test]
-        fn test_simultaneous_multiple_scalar_multiplication_proptest(k in arb_fr()) {
-            let k_uint = BigUint::from(k.into_bigint());
-
-            let p = random_point::<ark_bls12_381::g1::Config>();
-
-            assert_eq!(mul(p, &k_uint, &BETA, &LAMBDA), p.mul(k)); // the GLV method computes [k]p
-        }
+    fn arb_bigint() -> impl Strategy<Value = BigInt> {
+        any::<[u8; 32]>().prop_map(|bytes| {
+            BigInt::from_bytes_le(Sign::Plus, bytes.as_slice())
+                .rem(BigInt::from(ark_bls12_381::FrConfig::MODULUS))
+        })
     }
+
+    proptest! {
+         #![proptest_config(ProptestConfig::with_cases(10_000))]
+         #[test]
+         fn test_simultaneous_multiple_scalar_multiplication(k in arb_fr()) {
+             let k_uint = BigUint::from(k.into_bigint());
+
+             let p = random_point::<ark_bls12_381::g1::Config>();
+
+             assert_eq!(mul(p, &k_uint, &BETA, &LAMBDA), p.mul(k)); // the GLV method computes [k]p
+         }
+
+         #[test]
+         fn test_short_vector(k in arb_bigint()) {
+             let a: BigUint = ark_bls12_381::FrConfig::MODULUS.into();
+             let b: BigUint = LAMBDA.into();
+
+             let (k1, k2) = short_vector(&a, &b, &k.clone().to_biguint().unwrap());
+             assert!(k1.abs() < BigInt::from(a.clone()));
+             assert!(k2.abs() < BigInt::from(a.clone()));
+             let k_ = (&k1 + Into::<BigInt>::into(b) * &k2).mod_floor(&a.to_bigint().unwrap());
+
+             assert_eq!(k_.to_biguint().unwrap(), k.to_biguint().unwrap()); // k = k1 + lambda * k2 mod a
+             assert!(BigInt::max(k1, k2) < a.sqrt().into()); // (k1, k2) is a short vector
+         }
+
+         #[test]
+         fn test_truncated_extended_gcd(a in arb_bigint(), b in arb_bigint()) {
+             let (r, v) = truncated_extended_gcd(&a, &b);
+             let mut res: BigInt = r[1].clone();
+             res *= v[2].abs();
+             let mut res2 = r[2].clone();
+             res2 *= v[1].abs();
+             res += res2;
+
+             assert_eq!(res, a);
+
+             let mut res: BigInt = r[0].clone();
+             res *= v[1].abs();
+             let mut res2 = r[1].clone();
+             res2 *= v[0].abs();
+             res += res2;
+
+             assert_eq!(res, a);
+         }
+     }
 }
