@@ -23,7 +23,7 @@ Mod(4002409555221667392624310435006688643935503118305586438271171395842971157480
 Mod(228988810152649578064853576960394133503, 52435875175126190479447740508185965837690552500527637822603658699938581184513)*/
 const LAMBDA: Fr = field_new!(Fr, "228988810152649578064853576960394133503");
 
-fn phi_inplace(affine: &mut g1::G1Affine) -> () {
+fn phi_inplace(affine: &mut g1::G1Affine) {
     affine.x *= &BETA;
 }
 
@@ -62,12 +62,11 @@ pub fn short_vector(n: &BigUint, lambda: &BigUint, k: &BigUint) -> (BigInt, BigI
     let (r1, v1) = (r[1].clone(), -&v[1]);
     let (r2, v2) = (r[2].clone(), -&v[2]);
     let vec1 = (r1, v1);
-    let vec2: (BigInt, BigInt);
-    if norm_squared(&r0, &v0) < norm_squared(&r2, &v2) {
-        vec2 = (r0, v0);
+    let vec2: (BigInt, BigInt) = if norm_squared(&r0, &v0) < norm_squared(&r2, &v2) {
+        (r0, v0)
     } else {
-        vec2 = (r2, v2);
-    }
+        (r2, v2)
+    };
     // TODO: check that vec1 and vec2 are linearly independent
     let mut det = &vec1.0 * &vec2.1 - &vec1.1 * &vec2.0;
     let mut b1: BigInt = 2 * k.to_bigint().unwrap() * &vec2.1 + &det;
@@ -94,10 +93,10 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations(
     let mut pp = g1::G1Projective::zero();
     let mut qq = g1::G1Projective::zero();
     let (p, q) = match (u, v) {
-        (Sign::Minus, Sign::Minus) => (-p.clone(), -q.clone()),
-        (Sign::Plus, Sign::Minus) => (p.clone(), -q.clone()),
-        (Sign::Minus, Sign::Plus) => (-p.clone(), q.clone()),
-        _ => (p.clone(), q.clone()),
+        (Sign::Minus, Sign::Minus) => (-*p, -*q),
+        (Sign::Plus, Sign::Minus) => (*p, -*q),
+        (Sign::Minus, Sign::Plus) => (-*p, *q),
+        _ => (*p, *q),
     };
     for i in 0..=((1 << window_width) - 1) {
         qq.set_zero();
@@ -113,7 +112,7 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations(
 // get i-th digit of u in base 2^window_width
 // assumes window_width divides 64
 #[inline(always)]
-fn get_digit(u: &Vec<u64>, i: usize, window_width: usize) -> usize {
+fn get_digit(u: &[u64], i: usize, window_width: usize) -> usize {
     let idx = window_width * i;
     let e = u[idx / 64] as usize;
     let idx_e = idx % 64;
@@ -121,7 +120,7 @@ fn get_digit(u: &Vec<u64>, i: usize, window_width: usize) -> usize {
     ((mask << idx_e) & e) >> idx_e
 }
 
-fn pad_vec(v: &mut Vec<u64>, len: usize) -> () {
+fn pad_vec(v: &mut Vec<u64>, len: usize) {
     assert!(v.len() <= len);
     while v.len() < len {
         v.push(0_u64);
@@ -152,8 +151,8 @@ pub fn simultaneous_multiple_scalar_multiplication(
     let mut vi;
     for i in (0..=(d - 1)).rev() {
         r *= (1 << window_width).into();
-        ui = get_digit(&mut u, i, window_width);
-        vi = get_digit(&mut v, i, window_width);
+        ui = get_digit(&u, i, window_width);
+        vi = get_digit(&v, i, window_width);
         if !(ui == 0 && vi == 0) {
             r += precomputations[ui][vi];
         }
