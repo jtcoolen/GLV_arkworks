@@ -1,3 +1,5 @@
+use std::time::Instant;
+use ark_ec::CurveGroup;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ff::{AdditiveGroup, PrimeField, Zero};
 use ark_std::UniformRand;
@@ -7,6 +9,10 @@ use rand::rngs::OsRng;
 
 fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
     affine.x *= beta;
+}
+
+fn phi_inplace_proj<C: SWCurveConfig>(projective: &mut Projective<C>, beta: &C::BaseField) {
+    projective.x *= beta;
 }
 
 // Computes the remainders and Bézout coefficients for b of steps m,m+1,m+2 for the greatest r_m>sqrt(a)
@@ -37,7 +43,7 @@ fn norm_squared(a: &BigInt, b: &BigInt) -> BigInt {
 }
 
 // Returns a short vector in the integer lattice spanned by vectors vec1 and vec2
-// TODO example 1 of https://arxiv.org/pdf/1310.5250
+// TODO example 1 of https://arxiv.org/pdf/1310.5250 (but adapt to BLS12-381)
 // b1 = (1/2 t_pi-1, c) and (c, 1-1/2 * t_pi)
 // where c^2  = q-(t_pi/2)^2
 pub fn short_vector(n: &BigUint, lambda: &BigUint, k: &BigUint) -> (BigInt, BigInt) {
@@ -67,6 +73,7 @@ pub fn short_vector(n: &BigUint, lambda: &BigUint, k: &BigUint) -> (BigInt, BigI
 // Precomputations for Shamir's trick
 pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWCurveConfig>(
     window_width: u64,
+    beta: &C::BaseField,
     p: &Projective<C>,
     q: &Projective<C>,
     u: Sign,
@@ -75,22 +82,44 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
     assert_eq!(64 % window_width, 0);
     let mut table = vec![Projective::zero(); 1 << (2 * window_width)];
     let mut pp = Projective::zero();
-    let mut qq = Projective::zero();
+    let mut qq: Projective<C> = Projective::zero();
     let (p, q) = match (u, v) {
         (Sign::Minus, Sign::Minus) => (-*p, -*q),
         (Sign::Plus, Sign::Minus) => (*p, -*q),
         (Sign::Minus, Sign::Plus) => (-*p, *q),
         _ => (*p, *q),
     };
+
+    let mut ps = vec![];
+    for _ in 0..=((1 << window_width) - 1) {
+        ps.push(pp);
+        pp += p;
+    }
+
     let mut offset;
     for i in 0..=((1 << window_width) - 1) {
-        qq.set_zero();
         offset = i * (1 << window_width);
         for j in 0..=((1 << window_width) - 1) {
-            table[offset + j] += pp + qq;
-            qq += q;
+            table[offset + j] += ps[i];
         }
-        pp += p;
+    }
+
+    let mut qs = vec![qq];
+    //let mut tmp ;
+
+    for i in 1..=((1 << window_width) - 1) {
+        qq += q;
+        //tmp = ps[i];
+        //phi_inplace_proj(&mut tmp, beta);
+        //qs.push(tmp.clone());
+        qs.push(qq);
+    }
+
+    for i in 0..=((1 << window_width) - 1) {
+        offset = i * (1 << window_width);
+        for j in 0..=((1 << window_width) - 1) {
+            table[offset + j] += qs[j];
+        }
     }
     table
 }
@@ -129,17 +158,23 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
     pad_vec(&mut v, m);
     let mut ui;
     let mut vi;
+    //let mut n_doubles = 0;
+    //let mut n_adds = 0;
+
     for i in (0..=(d - 1)).rev() {
         for _ in 0..window_width {
             r.double_in_place();
+            //n_doubles += 1;
         }
 
         ui = get_digit(&u, i, window_width);
         vi = get_digit(&v, i, window_width);
         if !(ui == 0 && vi == 0) {
             r += &precomputations[ui * (1 << window_width) + vi];
+            //n_adds += 1;
         }
     }
+    //println!("n doubles = {}, n adds = {}", n_doubles, n_adds);
     r
 }
 
@@ -155,6 +190,7 @@ pub fn mul<C: SWCurveConfig>(
     beta: &C::BaseField,
     lambda: &C::ScalarField,
 ) -> Projective<C> {
+    //let now = Instant::now();
     let a: BigUint = C::ScalarField::MODULUS.into();
     let b: BigUint = (*lambda).into();
 
@@ -168,13 +204,18 @@ pub fn mul<C: SWCurveConfig>(
     let window_width: u64 = 2;
     let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
         window_width,
+        beta,
         &point.into(),
         &phi_p.into(),
         u.sign(),
         v.sign(),
     );
+    //println!("precomp {:?}", now.elapsed());
 
-    simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations)
+    //let now = Instant::now();
+    let res = simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations);
+    //println!("calc {:?}", now.elapsed());
+    res
 }
 
 #[cfg(test)]
