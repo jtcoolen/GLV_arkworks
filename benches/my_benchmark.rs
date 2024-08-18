@@ -8,7 +8,6 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use ff::Field;
 use group::Group;
 use std::ops::Mul;
-use std::time::Instant;
 
 use glv_rs::{mul, random_point, truncated_extended_gcd};
 use num_bigint::{BigUint, ToBigInt};

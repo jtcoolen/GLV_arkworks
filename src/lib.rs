@@ -1,14 +1,14 @@
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ff::{AdditiveGroup, PrimeField, Zero};
 use ark_std::UniformRand;
+use num_bigint::Sign::Minus;
 use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_integer::Integer;
 use rand::rngs::OsRng;
 use std::ops::Mul;
-use std::time::Instant;
 
-fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
-    affine.x *= beta;
+fn phi_inplace<C: SWCurveConfig>(projective: &mut Projective<C>, beta: &C::BaseField) {
+    projective.x *= beta;
 }
 
 // Computes the remainders and Bézout coefficients for b of steps m,m+1,m+2 for the greatest r_m>sqrt(a)
@@ -76,54 +76,51 @@ pub fn short_vector(k: &BigUint, r: &[BigInt; 3], v: &[BigInt; 3]) -> (BigInt, B
 // Precomputations for Shamir's trick
 // TODO use WNAF decomposition
 pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWCurveConfig>(
+    beta: &C::BaseField,
     window_width: u64,
     p: &Projective<C>,
-    q: &Projective<C>,
     u: Sign,
     v: Sign,
 ) -> Vec<Projective<C>> {
     assert_eq!(64 % window_width, 0);
-    let mut table = vec![Projective::zero(); 1 << (2 * window_width)];
-    let mut pp = Projective::zero();
-    let mut qq: Projective<C> = Projective::zero();
-    let (p, q) = match (u, v) {
-        (Sign::Minus, Sign::Minus) => (-*p, -*q),
-        (Sign::Plus, Sign::Minus) => (*p, -*q),
-        (Sign::Minus, Sign::Plus) => (-*p, *q),
-        _ => (*p, *q),
-    };
 
-    let mut ps = vec![];
-    for _ in 0..=((1 << window_width) - 1) {
-        ps.push(pp);
-        pp += p;
+    let table_size = 1 << (2 * window_width);
+    let mut table = vec![Projective::zero(); table_size];
+
+    let mut ps = Vec::with_capacity(1 << window_width);
+    let mut qs = Vec::with_capacity(1 << window_width);
+
+    let mut p_step = Projective::zero();
+    for _ in 0..(1 << window_width) {
+        ps.push(p_step.clone());
+        p_step += p;
     }
 
-    let mut offset;
-    for i in 0..=((1 << window_width) - 1) {
-        offset = i * (1 << window_width);
-        for j in 0..=((1 << window_width) - 1) {
-            table[offset + j] += ps[i];
+    let mut transformed_ps = ps.clone();
+    for e in &mut transformed_ps {
+        phi_inplace(e, beta);
+    }
+    qs.extend(transformed_ps);
+
+    if u == Minus {
+        ps.iter_mut().for_each(|p| {
+            let _ = p.neg_in_place();
+        });
+    }
+
+    if v == Minus {
+        qs.iter_mut().for_each(|q| {
+            let _ = q.neg_in_place();
+        });
+    }
+
+    for (i, p) in ps.iter().enumerate() {
+        let offset = i * (1 << window_width);
+        for (j, q) in qs.iter().enumerate() {
+            table[offset + j] += p + q;
         }
     }
 
-    let mut qs = vec![qq];
-    //let mut tmp ;
-
-    for _ in 1..=((1 << window_width) - 1) {
-        qq += q;
-        //tmp = ps[i];
-        //phi_inplace_proj(&mut tmp, beta);
-        //qs.push(tmp.clone());
-        qs.push(qq);
-    }
-
-    for i in 0..=((1 << window_width) - 1) {
-        offset = i * (1 << window_width);
-        for j in 0..=((1 << window_width) - 1) {
-            table[offset + j] += qs[j];
-        }
-    }
     table
 }
 
@@ -156,23 +153,19 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
     v.resize(m, 0_u64);
     let mut ui;
     let mut vi;
-    //let mut n_doubles = 0;
-    //let mut n_adds = 0;
 
     for i in (0..d).rev() {
         for _ in 0..window_width {
             r.double_in_place();
-            //n_doubles += 1;
         }
 
         ui = get_digit(&u, i, window_width);
         vi = get_digit(&v, i, window_width);
         if ui != 0 || vi != 0 {
             r += &precomputations[ui * (1 << window_width) + vi];
-            //n_adds += 1;
         }
     }
-    //println!("n doubles = {}, n adds = {}", n_doubles, n_adds);
+
     r
 }
 
@@ -188,29 +181,21 @@ pub fn mul<C: SWCurveConfig>(
     beta: &C::BaseField,
     gcd: &([BigInt; 3], [BigInt; 3]),
 ) -> Projective<C> {
-    //let now = Instant::now();
     let a: BigUint = C::ScalarField::MODULUS.into();
 
     let scalar = scalar.mod_floor(&a);
-
-    let mut phi_p = point;
-    phi_inplace(&mut phi_p, beta);
 
     let (u, v) = short_vector(&scalar, &gcd.0, &gcd.1);
 
     let window_width: u64 = 2;
     let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
+        beta,
         window_width,
         &point.into(),
-        &phi_p.into(),
         u.sign(),
         v.sign(),
     );
-    //println!("precomp {:?}", now.elapsed());
-
-    //let now = Instant::now();
     simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations)
-    //println!("calc {:?}", now.elapsed());
 }
 
 #[cfg(test)]
@@ -244,6 +229,10 @@ pub mod tests {
     ? znprimroot(r)^((r-1)/3)
     Mod(228988810152649578064853576960394133503, 52435875175126190479447740508185965837690552500527637822603658699938581184513)*/
     pub const LAMBDA: Fr = MontFp!("228988810152649578064853576960394133503");
+
+    fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
+        affine.x *= beta;
+    }
 
     #[test]
     fn test_phi() {
