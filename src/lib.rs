@@ -4,6 +4,8 @@ use ark_std::UniformRand;
 use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_integer::Integer;
 use rand::rngs::OsRng;
+use std::ops::Mul;
+use std::time::Instant;
 
 fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
     affine.x *= beta;
@@ -33,7 +35,7 @@ pub fn truncated_extended_gcd(a: &BigInt, b: &BigInt) -> ([BigInt; 3], [BigInt; 
 }
 
 fn norm_squared(a: &BigInt, b: &BigInt) -> BigInt {
-    a.pow(2) + b.pow(2)
+    a.mul(a) + b.mul(b)
 }
 
 // Returns a short vector in the integer lattice spanned by vectors vec1 and vec2
@@ -134,11 +136,6 @@ fn get_digit(u: &[u64], i: u64, window_width: u64) -> usize {
     ((e >> shift) & ((1 << window_width) - 1)) as usize
 }
 
-fn pad_vec(v: &mut Vec<u64>, len: usize) {
-    assert!(v.len() <= len);
-    v.resize(len, 0_u64);
-}
-
 // Shamir's trick (exponentiation using vector-addition chains)
 // windowed method
 pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
@@ -149,19 +146,19 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
 ) -> Projective<C> {
     assert_eq!(64 % window_width, 0);
     let mut r = Projective::zero();
-    let t: u64 = std::cmp::max(u.bits(), v.bits());
+    let t: u64 = u.bits().max(v.bits());
     let d = t.div_ceil(window_width);
     let mut u = u.to_u64_digits().1;
     let mut v = v.to_u64_digits().1;
-    let m = std::cmp::max(u.len(), v.len());
-    pad_vec(&mut u, m);
-    pad_vec(&mut v, m);
+    let m = u.len().max(v.len());
+    u.resize(m, 0_u64);
+    v.resize(m, 0_u64);
     let mut ui;
     let mut vi;
     //let mut n_doubles = 0;
     //let mut n_adds = 0;
 
-    for i in (0..=(d - 1)).rev() {
+    for i in (0..d).rev() {
         for _ in 0..window_width {
             r.double_in_place();
             //n_doubles += 1;
@@ -169,7 +166,7 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
 
         ui = get_digit(&u, i, window_width);
         vi = get_digit(&v, i, window_width);
-        if !(ui == 0 && vi == 0) {
+        if ui != 0 || vi != 0 {
             r += &precomputations[ui * (1 << window_width) + vi];
             //n_adds += 1;
         }
@@ -190,7 +187,7 @@ pub fn mul<C: SWCurveConfig>(
     beta: &C::BaseField,
     gcd: ([BigInt; 3], [BigInt; 3]),
 ) -> Projective<C> {
-    //let now = Instant::now();
+    let now = Instant::now();
     let a: BigUint = C::ScalarField::MODULUS.into();
 
     let scalar = scalar.mod_floor(&a);
@@ -208,11 +205,11 @@ pub fn mul<C: SWCurveConfig>(
         u.sign(),
         v.sign(),
     );
-    //println!("precomp {:?}", now.elapsed());
+    println!("precomp {:?}", now.elapsed());
 
-    //let now = Instant::now();
+    let now = Instant::now();
     let res = simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations);
-    //println!("calc {:?}", now.elapsed());
+    println!("calc {:?}", now.elapsed());
     res
 }
 
