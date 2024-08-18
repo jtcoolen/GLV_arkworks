@@ -4,8 +4,11 @@ use ark_std::UniformRand;
 use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_integer::Integer;
 use rand::rngs::OsRng;
-use std::ops::Mul;
+use std::ops::{Mul, Rem, ShrAssign, Sub, SubAssign};
 use std::time::Instant;
+use ark_ec::scalar_mul::wnaf::WnafContext;
+use group::{Wnaf, WnafScalar};
+use num_traits::ToPrimitive;
 
 fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
     affine.x *= beta;
@@ -82,21 +85,24 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
     u: Sign,
     v: Sign,
 ) -> Vec<Projective<C>> {
-    assert_eq!(64 % window_width, 0);
+    //assert_eq!(64 % window_width, 0);
     let mut table = vec![Projective::zero(); 1 << (2 * window_width)];
-    let mut pp = Projective::zero();
-    let mut qq: Projective<C> = Projective::zero();
-    let (p, q) = match (u, v) {
+
+    /*let (p, q) = match (u, v) {
         (Sign::Minus, Sign::Minus) => (-*p, -*q),
         (Sign::Plus, Sign::Minus) => (*p, -*q),
         (Sign::Minus, Sign::Plus) => (-*p, *q),
         _ => (*p, *q),
-    };
+    };*/
+
+    let dbl_p = p.double();
+    let dbl_q = q.double();
 
     let mut ps = vec![];
+    let mut pp = p.clone();
     for _ in 0..=((1 << window_width) - 1) {
         ps.push(pp);
-        pp += p;
+        pp += dbl_p;
     }
 
     let mut offset;
@@ -107,15 +113,17 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
         }
     }
 
-    let mut qs = vec![qq];
+
+    let mut qq: Projective<C> = q.clone();
+    let mut qs = vec![];
     //let mut tmp ;
 
-    for _ in 1..=((1 << window_width) - 1) {
-        qq += q;
+    for _ in 0..=((1 << window_width) - 1) {
         //tmp = ps[i];
         //phi_inplace_proj(&mut tmp, beta);
         //qs.push(tmp.clone());
         qs.push(qq);
+        qq += dbl_q;
     }
 
     for i in 0..=((1 << window_width) - 1) {
@@ -137,6 +145,42 @@ fn get_digit(u: &[u64], i: u64, window_width: u64) -> usize {
     ((e >> shift) & ((1 << window_width) - 1)) as usize
 }
 
+fn wnaf(d: &BigInt, window_width: u32) -> Vec<i64> {
+    let mut d = d.clone();
+    let mut decomposition = vec![];
+
+    let zero = BigInt::zero();
+
+    while d > zero {
+        if d.is_odd() {
+            let di = mods(&d, window_width);
+            d.sub_assign(&BigInt::from(di));
+            // println!("di={}", di);
+            decomposition.push(di);
+        } else {
+            decomposition.push(0);
+        }
+        d.shr_assign(1);
+    }
+
+    //println!("decomp={:?}", decomposition);
+    decomposition
+}
+
+fn mods(d: &BigInt, window_width: u32) -> i64 {
+    let window = 1 << window_width;
+    let r: BigInt = d % window;
+    let half_window = BigInt::from(1 << (window_width - 1));
+    //println!("r={}, window={}", r,  1 << window_width);
+    let res = if r >= half_window {
+        r - window
+    } else {
+        r
+    };
+
+    res.to_i64().unwrap()
+}
+
 // Shamir's trick (exponentiation using vector-addition chains)
 // windowed method
 pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
@@ -145,15 +189,16 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
     v: &BigInt,
     precomputations: Vec<Projective<C>>,
 ) -> Projective<C> {
-    assert_eq!(64 % window_width, 0);
+    //assert_eq!(64 % window_width, 0);
     let mut r = Projective::zero();
+
     let t: u64 = u.bits().max(v.bits());
     let d = t.div_ceil(window_width);
-    let mut u = u.to_u64_digits().1;
-    let mut v = v.to_u64_digits().1;
+    let mut u = wnaf(u, window_width as u32);
+    let mut v = wnaf(v, window_width as u32);
     let m = u.len().max(v.len());
-    u.resize(m, 0_u64);
-    v.resize(m, 0_u64);
+    u.resize(d as usize, 0_u64 as i64);
+    v.resize(d as usize, 0_u64 as i64);
     let mut ui;
     let mut vi;
     //let mut n_doubles = 0;
@@ -165,11 +210,25 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
             //n_doubles += 1;
         }
 
-        ui = get_digit(&u, i, window_width);
-        vi = get_digit(&v, i, window_width);
-        if ui != 0 || vi != 0 {
-            r += &precomputations[ui * (1 << window_width) + vi];
+        //ui = get_digit(&u, i, window_width);
+        //vi = get_digit(&v, i, window_width);
+        ui = ((u[i as usize]-1) >> 1);
+        vi = ((v[i as usize]-1) >> 1);
+        if ui > 0 && vi > 0 {
+            //println!("ui {}, vi {}", ui, vi);
+            r += &precomputations[(ui-1) as usize * (1 << window_width) + (vi-1) as usize];
             //n_adds += 1;
+        } else if ui < 0 && vi < 0 {
+            //println!("ui {}, vi {}", ui, vi);
+            r -= &precomputations[(-ui-1) as usize * (1 << window_width) + (-vi-1) as usize];
+        } else if ui < 0 && vi > 0 {
+            //println!("ui {}, vi {}", ui, vi);
+            r += &precomputations[(vi-1) as usize];
+            r -= &precomputations[(-ui-1) as usize * (1 << window_width)];
+        } else if ui > 0 && vi < 0 {
+            //println!("ui {}, vi {}", ui, vi);
+            r -= &precomputations[(-vi-1) as usize];
+            r += &precomputations[(ui-1) as usize * (1 << window_width)];
         }
     }
     //println!("n doubles = {}, n adds = {}", n_doubles, n_adds);
@@ -198,7 +257,7 @@ pub fn mul<C: SWCurveConfig>(
 
     let (u, v) = short_vector(&scalar, &gcd.0, &gcd.1);
 
-    let window_width: u64 = 2;
+    let window_width: u64 = 3;
     let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
         window_width,
         &point.into(),
