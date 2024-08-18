@@ -2,15 +2,15 @@ use ark_bls12_381::Fr;
 use ark_ec::bls12::Bls12Config;
 use ark_ec::scalar_mul::glv::GLVConfig;
 use ark_ec::short_weierstrass::Projective;
-use ark_ff::{MontFp, PrimeField};
+use ark_ff::{MontConfig, MontFp, PrimeField};
 use ark_std::UniformRand;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ff::Field;
 use group::Group;
 use std::ops::Mul;
 
-use glv_rs::{mul, random_point};
-use num_bigint::BigUint;
+use glv_rs::{mul, random_point, truncated_extended_gcd};
+use num_bigint::{BigUint, ToBigInt};
 use rand::rngs::OsRng;
 
 pub const BETA: <ark_bls12_381::Config as Bls12Config>::Fp = MontFp!("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436");
@@ -36,7 +36,10 @@ pub fn bench_glv(c: &mut Criterion) {
                 black_box(random_point::<ark_bls12_381::g1::Config>()),
                 black_box(&BigUint::from(Fr::rand(&mut OsRng).into_bigint())),
                 black_box(&BETA),
-                black_box(&LAMBDA),
+                black_box(truncated_extended_gcd(
+                    &ark_bls12_381::FrConfig::MODULUS.into(),
+                    &BigUint::from(LAMBDA.into_bigint()).to_bigint().unwrap(),
+                )),
             )
         })
     });
@@ -78,7 +81,7 @@ pub fn bench_glv_blst(c: &mut Criterion) {
 pub fn bench_naive(c: &mut Criterion) {
     c.bench_function("BLS12-381 G1 mul without GLV (arkworks crate)", |b| {
         b.iter(|| {
-                ark_bls12_381::g1::G1Affine::mul(
+            ark_bls12_381::g1::G1Affine::mul(
                 black_box(random_point::<ark_bls12_381::g1::Config>()),
                 black_box(Fr::rand(&mut OsRng)),
             )
