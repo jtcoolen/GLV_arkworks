@@ -1,11 +1,14 @@
-use std::time::Instant;
-use ark_ec::CurveGroup;
+use ark_ec::scalar_mul::wnaf::WnafContext;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
-use ark_ff::{AdditiveGroup, PrimeField, Zero};
+use ark_ec::CurveGroup;
+use ark_ff::{AdditiveGroup, BigInteger, BigInteger384, PrimeField, Zero};
 use ark_std::UniformRand;
+use blstrs::Scalar;
+use group::WnafBase;
 use num_bigint::{BigInt, BigUint, Sign, ToBigInt};
 use num_integer::Integer;
 use rand::rngs::OsRng;
+use std::time::Instant;
 
 fn phi_inplace<C: SWCurveConfig>(affine: &mut Affine<C>, beta: &C::BaseField) {
     affine.x *= beta;
@@ -78,11 +81,11 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
     q: &Projective<C>,
     u: Sign,
     v: Sign,
-) -> Vec<Projective<C>> {
-    assert_eq!(64 % window_width, 0);
-    let mut table = vec![Projective::zero(); 1 << (2 * window_width)];
-    let mut pp = Projective::zero();
-    let mut qq: Projective<C> = Projective::zero();
+) -> (Vec<Projective<C>>, Vec<Projective<C>>) {
+    //assert_eq!(64 % window_width, 0);
+    //let mut table = vec![Projective::zero(); 1 << (2 * window_width)];
+    //let mut pp = Projective::zero();
+    //let mut qq: Projective<C> = Projective::zero();
     let (p, q) = match (u, v) {
         (Sign::Minus, Sign::Minus) => (-*p, -*q),
         (Sign::Plus, Sign::Minus) => (*p, -*q),
@@ -90,7 +93,7 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
         _ => (*p, *q),
     };
 
-    let mut ps = vec![];
+    /*let mut ps = vec![];
     for _ in 0..=((1 << window_width) - 1) {
         ps.push(pp);
         pp += p;
@@ -113,6 +116,8 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
         //phi_inplace_proj(&mut tmp, beta);
         //qs.push(tmp.clone());
         qs.push(qq);
+        let x = BigInteger384::from(i);
+        x.find_wnaf().unwrap();
     }
 
     for i in 0..=((1 << window_width) - 1) {
@@ -121,7 +126,27 @@ pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWC
             table[offset + j] += qs[j];
         }
     }
-    table
+    table*/
+    let ctxt = WnafContext::new(window_width as usize);
+    let t1 = ctxt.table(p);
+    println!("t1 ={:?}", t1);
+    let t3 = ctxt.table(q);
+
+    /*let mut t2 = vec![];
+    let mut tmp ;
+
+
+    for i in 0..t1.len() {
+        //qq += q;
+        tmp = t1[i].into_affine();
+        phi_inplace(&mut tmp, beta);
+        t2.push(Projective::from(tmp));
+        //t3.push(qq);
+    }
+    println!("t2 ={:?}", t2);
+    println!("t3 ={:?}", t3);*/
+
+    (t1, t3)
 }
 
 // get i-th digit of u in base 2^window_width
@@ -145,23 +170,24 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
     window_width: u64,
     u: &BigInt,
     v: &BigInt,
-    precomputations: Vec<Projective<C>>,
+    precomputations: (Vec<Projective<C>>, Vec<Projective<C>>),
 ) -> Projective<C> {
-    assert_eq!(64 % window_width, 0);
+    //assert_eq!(64 % window_width, 0);
     let mut r = Projective::zero();
-    let t: u64 = std::cmp::max(u.bits(), v.bits());
-    let d = t.div_ceil(window_width);
-    let mut u = u.to_u64_digits().1;
-    let mut v = v.to_u64_digits().1;
-    let m = std::cmp::max(u.len(), v.len());
-    pad_vec(&mut u, m);
-    pad_vec(&mut v, m);
-    let mut ui;
-    let mut vi;
+    //let t: u64 = std::cmp::max(u.bits(), v.bits());
+    //let d = t.div_ceil(window_width);
+    //let mut u = u.to_u64_digits().1;
+    //let mut v = v.to_u64_digits().1;
+    //let m = std::cmp::max(u.len(), v.len());
+    //pad_vec(&mut u, m);
+    //pad_vec(&mut v, m);
+    //let mut ui;
+    //let mut vi;
+    let ctxt = WnafContext::new(window_width as usize);
     //let mut n_doubles = 0;
     //let mut n_adds = 0;
 
-    for i in (0..=(d - 1)).rev() {
+    /*for i in (0..=(d - 1)).rev() {
         for _ in 0..window_width {
             r.double_in_place();
             //n_doubles += 1;
@@ -173,7 +199,19 @@ pub fn simultaneous_multiple_scalar_multiplication<C: SWCurveConfig>(
             r += &precomputations[ui * (1 << window_width) + vi];
             //n_adds += 1;
         }
-    }
+    }*/
+    r = ctxt
+        .mul_with_table(
+            precomputations.0.as_slice(),
+            &C::ScalarField::from_le_bytes_mod_order(u.to_bytes_le().1.as_slice()),
+        )
+        .unwrap();
+    r += ctxt
+        .mul_with_table(
+            precomputations.1.as_slice(),
+            &C::ScalarField::from_le_bytes_mod_order(v.to_bytes_le().1.as_slice()),
+        )
+        .unwrap();
     //println!("n doubles = {}, n adds = {}", n_doubles, n_adds);
     r
 }
@@ -190,7 +228,7 @@ pub fn mul<C: SWCurveConfig>(
     beta: &C::BaseField,
     lambda: &C::ScalarField,
 ) -> Projective<C> {
-    //let now = Instant::now();
+    let now = Instant::now();
     let a: BigUint = C::ScalarField::MODULUS.into();
     let b: BigUint = (*lambda).into();
 
@@ -201,7 +239,7 @@ pub fn mul<C: SWCurveConfig>(
 
     let (u, v) = short_vector(&a, &b, &scalar);
 
-    let window_width: u64 = 2;
+    let window_width: u64 = 3;
     let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
         window_width,
         beta,
@@ -210,11 +248,11 @@ pub fn mul<C: SWCurveConfig>(
         u.sign(),
         v.sign(),
     );
-    //println!("precomp {:?}", now.elapsed());
+    println!("precomp {:?}", now.elapsed());
 
-    //let now = Instant::now();
+    let now = Instant::now();
     let res = simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations);
-    //println!("calc {:?}", now.elapsed());
+    println!("calc {:?}", now.elapsed());
     res
 }
 

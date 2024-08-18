@@ -1,13 +1,13 @@
-use std::time::Instant;
 use ark_bls12_381::Fr;
 use ark_ec::bls12::Bls12Config;
 use ark_ec::short_weierstrass::{Affine, Projective, SWCurveConfig};
 use ark_ff::{AdditiveGroup, MontFp, PrimeField};
 use ark_std::UniformRand;
+use glv_rs::{mul, random_point};
 use num_bigint::BigUint;
 use num_traits::Zero;
 use rand::rngs::OsRng;
-use glv_rs::{mul, random_point};
+use std::time::Instant;
 
 // TODO: compute BETA for any elliptic curve defined over a prime field
 // here the method doesn't work with root 1/BETA
@@ -26,7 +26,6 @@ Mod(4002409555221667392624310435006688643935503118305586438271171395842971157480
 ? znprimroot(r)^((r-1)/3)
 Mod(228988810152649578064853576960394133503, 52435875175126190479447740508185965837690552500527637822603658699938581184513)*/
 pub const LAMBDA: Fr = MontFp!("228988810152649578064853576960394133503");
-
 
 pub fn double_and_add_affine<P: SWCurveConfig>(
     base: &Affine<P>,
@@ -54,7 +53,6 @@ fn main() {
     println!("bitlen of scalar multiplier {}", k_uint.bits());
 
     let p = random_point::<ark_bls12_381::g1::Config>();
-
 
     let now = Instant::now();
     let _ = mul(p, &k_uint, &BETA, &LAMBDA); // the GLV method computes [k]p

@@ -78,7 +78,7 @@ pub fn bench_glv_blst(c: &mut Criterion) {
 pub fn bench_naive(c: &mut Criterion) {
     c.bench_function("BLS12-381 G1 mul without GLV (arkworks crate)", |b| {
         b.iter(|| {
-                ark_bls12_381::g1::G1Affine::mul(
+            ark_bls12_381::g1::G1Affine::mul(
                 black_box(random_point::<ark_bls12_381::g1::Config>()),
                 black_box(Fr::rand(&mut OsRng)),
             )
