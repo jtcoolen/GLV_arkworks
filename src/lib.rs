@@ -42,7 +42,7 @@ fn norm_squared(a: &BigInt, b: &BigInt) -> BigInt {
 // TODO example 1 of https://arxiv.org/pdf/1310.5250 (but adapt to BLS12-381)
 // b1 = (1/2 t_pi-1, c) and (c, 1-1/2 * t_pi)
 // where c^2  = q-(t_pi/2)^2
-pub fn short_vector(k: &BigUint, r: [BigInt; 3], v: [BigInt; 3]) -> (BigInt, BigInt) {
+pub fn short_vector(k: &BigUint, r: &[BigInt; 3], v: &[BigInt; 3]) -> (BigInt, BigInt) {
     let k_bigint = k.to_bigint().unwrap();
 
     let (r0, v0) = (r[0].clone(), -&v[0]);
@@ -185,9 +185,9 @@ pub fn mul<C: SWCurveConfig>(
     point: Affine<C>,
     scalar: &BigUint,
     beta: &C::BaseField,
-    gcd: ([BigInt; 3], [BigInt; 3]),
+    gcd: &([BigInt; 3], [BigInt; 3]),
 ) -> Projective<C> {
-    let now = Instant::now();
+    //let now = Instant::now();
     let a: BigUint = C::ScalarField::MODULUS.into();
 
     let scalar = scalar.mod_floor(&a);
@@ -195,7 +195,7 @@ pub fn mul<C: SWCurveConfig>(
     let mut phi_p = point;
     phi_inplace(&mut phi_p, beta);
 
-    let (u, v) = short_vector(&scalar, gcd.0, gcd.1);
+    let (u, v) = short_vector(&scalar, &gcd.0, &gcd.1);
 
     let window_width: u64 = 2;
     let precomputations = simultaneous_multiple_scalar_multiplication_create_precomputations(
@@ -205,12 +205,11 @@ pub fn mul<C: SWCurveConfig>(
         u.sign(),
         v.sign(),
     );
-    println!("precomp {:?}", now.elapsed());
+    //println!("precomp {:?}", now.elapsed());
 
-    let now = Instant::now();
-    let res = simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations);
-    println!("calc {:?}", now.elapsed());
-    res
+    //let now = Instant::now();
+    simultaneous_multiple_scalar_multiplication(window_width, &u, &v, precomputations)
+    //println!("calc {:?}", now.elapsed());
 }
 
 #[cfg(test)]
@@ -283,7 +282,7 @@ pub mod tests {
             let lambda_bigint = lambda.to_bigint().unwrap();
             let gcd = truncated_extended_gcd(&n_bigint, &lambda_bigint);
 
-            assert_eq!(mul(p, &k_uint, &BETA, gcd), p.mul(k)); // the GLV method computes [k]p
+            assert_eq!(mul(p, &k_uint, &BETA, &gcd), p.mul(k)); // the GLV method computes [k]p
         }
 
         #[test]
@@ -295,7 +294,7 @@ pub mod tests {
             let lambda_bigint = b.to_bigint().unwrap();
             let gcd = truncated_extended_gcd(&n_bigint, &lambda_bigint);
 
-            let (k1, k2) = short_vector(&k.clone().to_biguint().unwrap(), gcd.0, gcd.1);
+            let (k1, k2) = short_vector(&k.clone().to_biguint().unwrap(), &gcd.0, &gcd.1);
             assert!(k1.abs() < BigInt::from(a.clone()));
             assert!(k2.abs() < BigInt::from(a.clone()));
             let k_ = (&k1 + Into::<BigInt>::into(b) * &k2).mod_floor(&a.to_bigint().unwrap());

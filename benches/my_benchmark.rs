@@ -4,10 +4,11 @@ use ark_ec::scalar_mul::glv::GLVConfig;
 use ark_ec::short_weierstrass::Projective;
 use ark_ff::{MontConfig, MontFp, PrimeField};
 use ark_std::UniformRand;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use ff::Field;
 use group::Group;
 use std::ops::Mul;
+use std::time::Instant;
 
 use glv_rs::{mul, random_point, truncated_extended_gcd};
 use num_bigint::{BigUint, ToBigInt};
@@ -31,61 +32,45 @@ pub const LAMBDA: Fr = MontFp!("228988810152649578064853576960394133503");
 
 pub fn bench_glv(c: &mut Criterion) {
     c.bench_function("BLS12-381 G1 mul (glv-rs crate)", |b| {
-        b.iter(|| {
-            mul(
-                black_box(random_point::<ark_bls12_381::g1::Config>()),
-                black_box(&BigUint::from(Fr::rand(&mut OsRng).into_bigint())),
-                black_box(&BETA),
-                black_box(truncated_extended_gcd(
-                    &ark_bls12_381::FrConfig::MODULUS.into(),
-                    &BigUint::from(LAMBDA.into_bigint()).to_bigint().unwrap(),
-                )),
-            )
-        })
+        let point = random_point::<ark_bls12_381::g1::Config>();
+        let scalar = BigUint::from(Fr::rand(&mut OsRng).into_bigint());
+        let gcd = truncated_extended_gcd(
+            &ark_bls12_381::FrConfig::MODULUS.into(),
+            &BigUint::from(LAMBDA.into_bigint()).to_bigint().unwrap(),
+        );
+        b.iter(|| mul(point, &scalar, &BETA, &gcd))
     });
 }
 
 pub fn bench_glv_projective_arkworks(c: &mut Criterion) {
     c.bench_function("BLS12-381 G1 projective mul (arkworks crate)", |b| {
-        b.iter(|| {
-            GLVConfig::glv_mul_projective(
-                black_box(Projective::from(random_point::<ark_bls12_381::g1::Config>())),
-                black_box(Fr::rand(&mut OsRng)),
-            )
-        })
+        let point = Projective::from(random_point::<ark_bls12_381::g1::Config>());
+        let scalar = Fr::rand(&mut OsRng);
+        b.iter(|| GLVConfig::glv_mul_projective(point, scalar))
     });
 }
 
 pub fn bench_glv_affine_arkworks(c: &mut Criterion) {
     c.bench_function("BLS12-381 G1 affine mul (arkworks crate)", |b| {
-        b.iter(|| {
-            GLVConfig::glv_mul_affine(
-                black_box(random_point::<ark_bls12_381::g1::Config>()),
-                black_box(Fr::rand(&mut OsRng)),
-            )
-        })
+        let point = random_point::<ark_bls12_381::g1::Config>();
+        let scalar = Fr::rand(&mut OsRng);
+        b.iter(|| GLVConfig::glv_mul_affine(point, scalar))
     });
 }
 
 pub fn bench_glv_blst(c: &mut Criterion) {
     c.bench_function("BLS12-381 G1 projective mul (blstrs crate)", |b| {
-        b.iter(|| {
-            blstrs::G1Projective::mul(
-                black_box(blstrs::G1Projective::random(&mut OsRng)),
-                black_box(&blstrs::Scalar::random(&mut OsRng)),
-            )
-        })
+        let point = blstrs::G1Projective::random(&mut OsRng);
+        let scalar = blstrs::Scalar::random(&mut OsRng);
+        b.iter(|| blstrs::G1Projective::mul(point, &scalar))
     });
 }
 
 pub fn bench_naive(c: &mut Criterion) {
     c.bench_function("BLS12-381 G1 mul without GLV (arkworks crate)", |b| {
-        b.iter(|| {
-            ark_bls12_381::g1::G1Affine::mul(
-                black_box(random_point::<ark_bls12_381::g1::Config>()),
-                black_box(Fr::rand(&mut OsRng)),
-            )
-        })
+        let point = random_point::<ark_bls12_381::g1::Config>();
+        let scalar = Fr::rand(&mut OsRng);
+        b.iter(|| ark_bls12_381::g1::G1Affine::mul(point, &scalar))
     });
 }
 

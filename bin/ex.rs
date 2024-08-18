@@ -61,7 +61,7 @@ fn main() {
     let gcd = truncated_extended_gcd(&n_bigint, &lambda_bigint);
 
     let now = Instant::now();
-    let _ = mul(p, &k_uint, &BETA, gcd); // the GLV method computes [k]p
+    let _ = mul(p, &k_uint, &BETA, &gcd); // the GLV method computes [k]p
     println!("elapsed GLV = {:?}", now.elapsed());
 
     let now = Instant::now();
