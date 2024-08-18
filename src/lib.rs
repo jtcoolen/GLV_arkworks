@@ -74,6 +74,7 @@ pub fn short_vector(k: &BigUint, r: &[BigInt; 3], v: &[BigInt; 3]) -> (BigInt, B
 }
 
 // Precomputations for Shamir's trick
+// TODO use WNAF decomposition
 pub fn simultaneous_multiple_scalar_multiplication_create_precomputations<C: SWCurveConfig>(
     window_width: u64,
     p: &Projective<C>,
